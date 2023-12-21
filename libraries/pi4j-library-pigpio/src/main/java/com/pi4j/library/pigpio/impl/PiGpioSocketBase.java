@@ -31,13 +31,12 @@ import static com.pi4j.library.pigpio.PiGpioConst.DEFAULT_HOST;
 import static com.pi4j.library.pigpio.PiGpioConst.DEFAULT_PORT;
 
 import java.io.IOException;
-import java.net.Socket;
-import java.net.SocketException;
 
 import com.pi4j.library.pigpio.PiGpio;
 import com.pi4j.library.pigpio.PiGpioCmd;
 import com.pi4j.library.pigpio.PiGpioException;
 import com.pi4j.library.pigpio.PiGpioPacket;
+import com.pi4j.library.pigpio.PiGpioStreamsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,12 +50,14 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
 
     private static final Logger logger = LoggerFactory.getLogger(PiGpioSocketBase.class);
 
+    private final PiGpioStreamsProvider streamsProvider;
+    private final PiGpioPacketSender packetSender;
+
     protected final PiGpioSocketMonitor monitor;
 
     protected String host = DEFAULT_HOST;
     protected int port = DEFAULT_PORT;
     protected boolean connected = false;
-    protected Socket socket = null;
 
     // TODO :: IMPLEMENT CONNECTION MONITOR TO PROACTIVELY DETECT SOCKET DISCONNECTS AND AUTO-RETRY TO CONNECT IN BACKGROUND THREAD
 
@@ -69,8 +70,15 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      * @param port TCP port number of the RaspberryPi to connect to via TCP/IP socket.
      */
     protected PiGpioSocketBase(String host, int port) {
-        this.host = host;
-        this.port = port;
+        this(new PiGpioStreamsProvider.SocketStreamsProvider(
+            new PiGpioStreamsProvider.DefaultSocketSupplier(host, port)
+        ));
+    }
+
+    protected PiGpioSocketBase(PiGpioStreamsProvider streamsProvider) {
+        this.streamsProvider = streamsProvider;
+        this.packetSender = new PiGpioPacketSender.DefaultPacketSender(streamsProvider);
+
         this.connected = false;
         this.initialized = false;
         this.monitor = new PiGpioSocketMonitor(this);
@@ -138,13 +146,12 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
         }
 
         // shutdown connected socket
-        if(socket != null && socket.isConnected())
-            try {
-                socket.close();
-            }
-            catch (IOException e) {
-                throw new PiGpioException(e);
-            }
+        try {
+            streamsProvider.close();
+        }
+        catch (IOException e) {
+            throw new PiGpioException(e);
+        }
 
         // clear initialized flag
         this.initialized = false;
@@ -158,7 +165,7 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      * @return a {@link com.pi4j.library.pigpio.PiGpioPacket} object.
      */
     protected PiGpioPacket sendCommand(PiGpioCmd cmd) {
-        return sendPacket(new PiGpioPacket(cmd));
+        return packetSender.sendCommand(cmd);
     }
 
     /**
@@ -169,7 +176,7 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      * @return a {@link com.pi4j.library.pigpio.PiGpioPacket} object.
      */
     protected PiGpioPacket sendCommand(PiGpioCmd cmd, int p1) {
-        return sendPacket(new PiGpioPacket(cmd, p1));
+        return packetSender.sendCommand(cmd, p1);
     }
     /**
      * <p>sendCommand.</p>
@@ -180,7 +187,7 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      * @return a {@link com.pi4j.library.pigpio.PiGpioPacket} object.
      */
     protected PiGpioPacket sendCommand(PiGpioCmd cmd, int p1, int p2) {
-        return sendPacket(new PiGpioPacket(cmd, p1, p2));
+        return packetSender.sendCommand(cmd, p1, p2);
     }
     /**
      * <p>sendPacket.</p>
@@ -190,41 +197,7 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      */
     protected PiGpioPacket sendPacket(PiGpioPacket tx) {
         validateReady();
-        return sendPacket(tx, this.socket);
-    }
-    /**
-     * <p>sendPacket.</p>
-     *
-     * @param tx a {@link com.pi4j.library.pigpio.PiGpioPacket} object.
-     * @param sck a {@link java.net.Socket} object.
-     * @return a {@link com.pi4j.library.pigpio.PiGpioPacket} object.
-     */
-    protected PiGpioPacket sendPacket(PiGpioPacket tx, Socket sck) {
-        try {
-            try {
-                // get socket streams
-                var in = sck.getInputStream();
-                var out = sck.getOutputStream();
-
-                // transmit packet
-                logger.trace("[TX] -> " + tx.toString());
-                out.write(PiGpioPacket.encode(tx));
-                out.flush();
-
-                // read receive packet
-                PiGpioPacket rx = PiGpioPacket.decode(in);
-                logger.trace("[RX] <- " + rx.toString());
-                return rx;
-            } catch (SocketException se) {
-                // socket is no longer connected
-                this.connected = false;
-                socket.close();
-                socket = null;
-                throw new PiGpioException(se);
-            }
-        } catch (IOException e) {
-            throw new PiGpioException(e);
-        }
+        return packetSender.sendPacket(tx);
     }
 
     /** {@inheritDoc} */
@@ -259,20 +232,11 @@ public abstract class PiGpioSocketBase extends PiGpioBase implements PiGpio {
      */
     protected void validateConnection() {
         // if not connected, attempt to reconnect
-        if(socket == null || !this.connected){
-            // attempt to connect to PiGpio Daemon on remote Raspberry Pi
-            try {
-                this.socket = new Socket(host, port);
-                this.socket.setSoTimeout(500);
-            } catch (IOException e) {
-                throw new PiGpioException(e);
-            }
-
-            // update connection status flag
-            this.connected = this.socket.isConnected();
+        if(!connected){
+            streamsProvider.validateReady();
+            // if not ready and exception will be thrown and `connected` remains false
+            connected = true;
         }
-//            throw new IOException("PIGPIO NOT CONNECTED TO REMOTE HOST [" + this.host + ":" + this.port +
-//                    "]; make sure the PiGpio Daemon is running on the remote Raspberry Pi and the host is accessible.");
     }
 
 //    protected void enableNotifications() {

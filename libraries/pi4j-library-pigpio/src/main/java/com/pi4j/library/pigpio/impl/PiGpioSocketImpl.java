@@ -10,7 +10,7 @@ package com.pi4j.library.pigpio.impl;
  * This file is part of the Pi4J project. More information about
  * this project can be found here:  https://pi4j.com/
  * **********************************************************************
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
  * published by the Free Software Foundation, either version 3 of the
@@ -92,6 +92,10 @@ public class PiGpioSocketImpl extends PiGpioSocketBase implements PiGpio {
         return new PiGpioSocketImpl(DEFAULT_HOST, DEFAULT_PORT);
     }
 
+    public static PiGpio newInstance(PiGpioStreamsProvider streamsProvider) {
+        return new PiGpioSocketImpl(streamsProvider);
+    }
+
     /**
      * DEFAULT PRIVATE CONSTRUCTOR
      *
@@ -101,7 +105,17 @@ public class PiGpioSocketImpl extends PiGpioSocketBase implements PiGpio {
      * @param port TCP port number of the RaspberryPi to connect to via TCP/IP socket.
      */
     private PiGpioSocketImpl(String host, int port) {
-        super(host, port);
+        super(new PiGpioStreamsProvider.SocketStreamsProvider(
+            new PiGpioStreamsProvider.DefaultSocketSupplier(host, port)
+        ));
+    }
+
+    /**
+     * Implementation with in/out streams provided by the specified provider instance
+     * @param streamsProvider factory for in/out streams
+     */
+    private PiGpioSocketImpl(PiGpioStreamsProvider streamsProvider) {
+        super(streamsProvider);
     }
 
     /**

@@ -69,6 +69,16 @@ public interface PiGpio extends
     }
 
     /**
+     * Creates a PiGpio instance using java streams for remote I/O access
+     *
+     * @param streamsProvider factory for in/out streams
+     * @return a {@link com.pi4j.library.pigpio.PiGpio} object.
+     */
+    static PiGpio newStreamsInstance(PiGpioStreamsProvider streamsProvider) {
+        return PiGpioSocketImpl.newInstance(streamsProvider);
+    }
+
+    /**
      * Creates a PiGpio instance using TCP Socket communication for remote I/O access.
      * Connects to a user specified socket hostname/ip address using the default port (8888).
      *
@@ -129,7 +139,7 @@ public interface PiGpio extends
      * @return
      */
     int gpioCfgClock(int cfgMicros, int cfgPeripheral, int cfgSource);
-    
+
     /**
      * Initialises the library.
      *
